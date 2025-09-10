@@ -44,59 +44,68 @@ pub fn scheme_from_env() -> Scheme {
 }
 
 pub fn hash_pin(pin: &mut String) -> Result<String, PinHashError> {
-    let scheme = scheme_from_env();
-    let out = match scheme {
-        Scheme::Sha512Crypt => {
-            #[cfg(feature = "sha-crypt")]
-            {
-                let params = Sha512Params::default();
-                sha512_simple(pin, &params)
-                    .map_err(|e| PinHashError::HashFailure(format!("{e:?}")))?
+    // If neither hashing backend is compiled in, fail early without unreachable code.
+    #[cfg(all(not(feature = "sha-crypt"), not(feature = "argon2")))]
+    {
+        let _ = pin; // silence unused warning
+        Err(PinHashError::UnsupportedScheme)
+    }
+
+    #[cfg(any(feature = "sha-crypt", feature = "argon2"))]
+    {
+        let scheme = scheme_from_env();
+        let out = match scheme {
+            Scheme::Sha512Crypt => {
+                #[cfg(feature = "sha-crypt")]
+                {
+                    let params = Sha512Params::default();
+                    sha512_simple(pin, &params)
+                        .map_err(|e| PinHashError::HashFailure(format!("{e:?}")))?
+                }
+                #[cfg(not(feature = "sha-crypt"))]
+                {
+                    return Err(PinHashError::UnsupportedScheme);
+                }
             }
-            #[cfg(not(feature = "sha-crypt"))]
-            {
-                return Err(PinHashError::UnsupportedScheme);
-            }
-        }
-        Scheme::Argon2id => {
-            #[cfg(feature = "argon2")]
-            {
-                let salt = SaltString::generate(&mut OsRng);
-                // Allow tuning via env vars (fallback to Argon2::default())
-                let argon = {
-                    let base = Argon2::default();
-                    if let (Ok(m), Ok(t), Ok(p)) = (
-                        std::env::var("PIN_ARGON2_M_COST").unwrap_or_default().parse::<u32>(),
-                        std::env::var("PIN_ARGON2_T_COST").unwrap_or_default().parse::<u32>(),
-                        std::env::var("PIN_ARGON2_P_COST").unwrap_or_default().parse::<u32>(),
-                    ) {
-                        if m > 0 && t > 0 && p > 0 {
-                            use argon2::{Algorithm, Params, Version};
-                            if let Ok(params) = Params::new(m, t, p, None) {
-                                Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+            Scheme::Argon2id => {
+                #[cfg(feature = "argon2")]
+                {
+                    let salt = SaltString::generate(&mut OsRng);
+                    let argon = {
+                        let base = Argon2::default();
+                        if let (Ok(m), Ok(t), Ok(p)) = (
+                            std::env::var("PIN_ARGON2_M_COST").unwrap_or_default().parse::<u32>(),
+                            std::env::var("PIN_ARGON2_T_COST").unwrap_or_default().parse::<u32>(),
+                            std::env::var("PIN_ARGON2_P_COST").unwrap_or_default().parse::<u32>(),
+                        ) {
+                            if m > 0 && t > 0 && p > 0 {
+                                use argon2::{Algorithm, Params, Version};
+                                if let Ok(params) = Params::new(m, t, p, None) {
+                                    Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+                                } else {
+                                    base
+                                }
                             } else {
                                 base
                             }
                         } else {
                             base
                         }
-                    } else {
-                        base
-                    }
-                };
-                argon
-                    .hash_password(pin.as_bytes(), &salt)
-                    .map_err(|e| PinHashError::HashFailure(e.to_string()))?
-                    .to_string()
+                    };
+                    argon
+                        .hash_password(pin.as_bytes(), &salt)
+                        .map_err(|e| PinHashError::HashFailure(e.to_string()))?
+                        .to_string()
+                }
+                #[cfg(not(feature = "argon2"))]
+                {
+                    return Err(PinHashError::UnsupportedScheme);
+                }
             }
-            #[cfg(not(feature = "argon2"))]
-            {
-                return Err(PinHashError::UnsupportedScheme);
-            }
-        }
-    };
+        };
     pin.zeroize();
-    Ok(out)
+        Ok(out)
+    }
 }
 
 pub fn verify_pin(candidate: &mut String, stored: &str) -> bool {

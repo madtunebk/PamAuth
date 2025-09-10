@@ -276,11 +276,9 @@ fn validate_username(u: &str) -> bool {
 fn secure_resolve_pin_dir(input: &str) -> Result<String> {
     // Always require absolute path when running setuid root; otherwise allow relative for tests.
     let euid_root = nix::unistd::geteuid().as_raw() == 0;
-    let path = if euid_root { Path::new(input) } else { Path::new(input) };
-    if euid_root {
-        if !path.is_absolute() {
-            anyhow::bail!("PIN_DIR must be absolute under root");
-        }
+    let path = Path::new(input);
+    if euid_root && !path.is_absolute() {
+        anyhow::bail!("PIN_DIR must be absolute under root");
     }
     // Canonicalize (best effort); if it fails we still attempt metadata on original.
     let meta_path = path;
