@@ -19,10 +19,10 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets ${{ matrix.feature-set }} -- -D warnings
         shell: bash
       - name: Test
-        run: cargo test ${{ matrix.feature-set }}
+        run: ALLOW_NON_ROOT=1 cargo test ${{ matrix.feature-set }}
         shell: bash
       - name: Fmt
         run: cargo fmt -- --check
