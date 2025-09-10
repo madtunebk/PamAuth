@@ -103,8 +103,15 @@ fn no_username_noop() {
         .env("GENPIN_NONINTERACTIVE", "1357")
         .status()
         .unwrap();
-    assert!(status.success(), "genpin without username should succeed (noop)");
-    assert_eq!(fs::read_dir(dir).unwrap().count(), 0, "No files should be created when username missing");
+    assert!(
+        status.success(),
+        "genpin without username should succeed (noop)"
+    );
+    assert_eq!(
+        fs::read_dir(dir).unwrap().count(),
+        0,
+        "No files should be created when username missing"
+    );
 }
 
 #[test]

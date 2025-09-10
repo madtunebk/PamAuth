@@ -20,7 +20,9 @@ fn main() -> Result<()> {
         #[cfg(debug_assertions)]
         {
             if std::env::var("ALLOW_NON_ROOT").ok().as_deref() != Some("1") {
-                eprintln!("denied: requires root (set ALLOW_NON_ROOT=1 in debug to bypass for tests)");
+                eprintln!(
+                    "denied: requires root (set ALLOW_NON_ROOT=1 in debug to bypass for tests)"
+                );
                 std::process::exit(1);
             }
         }

@@ -1,23 +1,23 @@
 use anyhow::{Context, Result};
+use nix::libc; // for O_NOFOLLOW / O_CLOEXEC
 use pin_auth::verify_pin;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read};
 use std::io::{Seek, SeekFrom, Write as IoWrite};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use nix::libc; // for O_NOFOLLOW / O_CLOEXEC
-use std::os::unix::io::AsRawFd;
 #[cfg(feature = "syslog")]
 use syslog::{Facility, Formatter3164};
 
 // Exit codes
-const EXIT_OK: i32 = 0;          // success
-const EXIT_MISMATCH: i32 = 1;    // wrong pin / generic failure
-const EXIT_LOCKED: i32 = 2;      // locked out
-const EXIT_INPUT: i32 = 3;       // bad input format / empty
-const EXIT_CONFIG: i32 = 4;      // config error (length policy, etc.)
+const EXIT_OK: i32 = 0; // success
+const EXIT_MISMATCH: i32 = 1; // wrong pin / generic failure
+const EXIT_LOCKED: i32 = 2; // locked out
+const EXIT_INPUT: i32 = 3; // bad input format / empty
+const EXIT_CONFIG: i32 = 4; // config error (length policy, etc.)
 
 fn main() -> Result<()> {
     // Enforce root effective UID; debug build allows ALLOW_NON_ROOT=1 for tests.
@@ -31,7 +31,9 @@ fn main() -> Result<()> {
         #[cfg(debug_assertions)]
         {
             if env::var("ALLOW_NON_ROOT").ok().as_deref() != Some("1") {
-                eprintln!("denied: requires root (set ALLOW_NON_ROOT=1 in debug to bypass for tests)");
+                eprintln!(
+                    "denied: requires root (set ALLOW_NON_ROOT=1 in debug to bypass for tests)"
+                );
                 std::process::exit(EXIT_CONFIG);
             }
         }
@@ -64,7 +66,9 @@ fn main() -> Result<()> {
     };
     let base_dir = secure_resolve_pin_dir(&requested_dir).unwrap_or_else(|_e| {
         #[cfg(feature = "syslog")]
-        if let Some(ref mut l) = logger { let _ = l.err("pin-auth: dir validation failed".to_string()); }
+        if let Some(ref mut l) = logger {
+            let _ = l.err("pin-auth: dir validation failed".to_string());
+        }
         std::process::exit(EXIT_CONFIG)
     });
     let path = format!("{}/{}.passwd", base_dir, user);
@@ -78,7 +82,9 @@ fn main() -> Result<()> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(5);
-    let fail_file: PathBuf = [base_dir.as_str(), &format!("{}.fail", user)].iter().collect();
+    let fail_file: PathBuf = [base_dir.as_str(), &format!("{}.fail", user)]
+        .iter()
+        .collect();
     let lockout_secs: u64 = env::var("PIN_LOCKOUT_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -87,7 +93,7 @@ fn main() -> Result<()> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(900); // 15 minutes aggregation window
-    // Syslog failure sampling: log only every Nth failure (plus first & lock events)
+                         // Syslog failure sampling: log only every Nth failure (plus first & lock events)
     let _fail_sample: u32 = env::var("PIN_SYSLOG_FAIL_SAMPLE")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -113,50 +119,18 @@ fn main() -> Result<()> {
     {
         Ok(f) => f,
         Err(_) => {
-            // Conservative: if cannot open tracking file, proceed without state (safer than denying legitimate auth attempt)
-            // but no lockout enforced.
-            // We still continue; subsequent code will treat empty state.
-            // (Could also EXIT_CONFIG; design choice.)
-            // Proceed.
-            // Using a dummy file was overkill; simply skip parsing.
-            // Fall through with fail_count=0.
-            // NOTE: can't lock.
-            // Return to flow.
-            // (Intentionally empty)
-            //
-            // Because we cannot update the file, lockout enforcement becomes best-effort only.
-            // This scenario should be rare.
-            //
-            // Continue execution.
-            //
-            // No early return.
-            //
-            // placeholder
-            //
-            // done
-            //
-            //
-            // (Yes, verbose comment for clarity.)
-            //
-            //
-            //
-            //
-            //
-            // End of commentary.
-            //
-            //
-            //
-            //
-            //
-            //
-            // Already explained rationale above.
-            // Continue below.
-            //
-            // Provide a dummy handle logic by reopening /dev/null (read-only) so later code using fail_fh will fail gracefully if writing attempted.
-            if let Ok(devnull) = OpenOptions::new().read(true).open("/dev/null") { devnull } else { return Err(anyhow::anyhow!("failed to open fail state")); }
+            // Could not open fail tracking file. Proceed without persistent fail/lockout state
+            // (better to allow auth than hard-fail). Use /dev/null so later writes are no-ops.
+            if let Ok(devnull) = OpenOptions::new().read(true).open("/dev/null") {
+                devnull
+            } else {
+                return Err(anyhow::anyhow!("failed to open fail state"));
+            }
         }
     };
-    unsafe { libc::flock(fail_fh.as_raw_fd(), libc::LOCK_EX); }
+    unsafe {
+        libc::flock(fail_fh.as_raw_fd(), libc::LOCK_EX);
+    }
     // Read existing content
     let mut raw_state = String::new();
     if std::io::Read::read_to_string(&mut fail_fh, &mut raw_state).is_ok() {
@@ -165,7 +139,9 @@ fn main() -> Result<()> {
             if let Ok(until) = rest.parse::<u64>() {
                 if now < until {
                     #[cfg(feature = "syslog")]
-                    if let Some(ref mut l) = logger { let _ = l.err(format!("pin-auth: user={user} locked (until {until})")); }
+                    if let Some(ref mut l) = logger {
+                        let _ = l.err(format!("pin-auth: user={user} locked (until {until})"));
+                    }
                     std::process::exit(EXIT_LOCKED);
                 } else {
                     // expired: overwrite below
@@ -176,7 +152,8 @@ fn main() -> Result<()> {
                 fail_count = c;
                 first_ts = t;
             }
-        } else if let Ok(c) = line.parse::<u32>() { // legacy
+        } else if let Ok(c) = line.parse::<u32>() {
+            // legacy
             fail_count = c;
             first_ts = now;
         }
@@ -195,7 +172,9 @@ fn main() -> Result<()> {
             let _ = IoWrite::write_all(&mut fail_fh, format!("lock:{}\n", until).as_bytes());
         }
         #[cfg(feature = "syslog")]
-        if let Some(ref mut l) = logger { let _ = l.err(format!("pin-auth: user={user} locked (threshold reached)")); }
+        if let Some(ref mut l) = logger {
+            let _ = l.err(format!("pin-auth: user={user} locked (threshold reached)"));
+        }
         std::process::exit(EXIT_LOCKED);
     }
 
@@ -229,49 +208,77 @@ fn main() -> Result<()> {
 
     if verify_pin(&mut candidate, &stored) {
         // success → reset fail counter / lock
-    let _ = fail_fh.set_len(0);
-    let _ = fail_fh.seek(SeekFrom::Start(0));
-    #[cfg(feature = "syslog")]
-    if let Some(ref mut l) = logger { let _ = l.info(format!("pin-auth: user={user} success")); }
-    std::process::exit(EXIT_OK);
+        let _ = fail_fh.set_len(0);
+        let _ = fail_fh.seek(SeekFrom::Start(0));
+        #[cfg(feature = "syslog")]
+        if let Some(ref mut l) = logger {
+            let _ = l.info(format!("pin-auth: user={user} success"));
+        }
+        std::process::exit(EXIT_OK);
     } else {
-    fail_count += 1;
+        fail_count += 1;
         // persist update
-    let _ = fail_fh.set_len(0);
-    let _ = fail_fh.seek(SeekFrom::Start(0));
+        let _ = fail_fh.set_len(0);
+        let _ = fail_fh.seek(SeekFrom::Start(0));
         if fail_count >= max_fails {
             if lockout_secs > 0 {
                 let until = now.saturating_add(lockout_secs);
                 let _ = IoWrite::write_all(&mut fail_fh, format!("lock:{}\n", until).as_bytes());
             } else {
-                let _ = IoWrite::write_all(&mut fail_fh, format!("{}:{}\n", fail_count, first_ts).as_bytes());
+                let _ = IoWrite::write_all(
+                    &mut fail_fh,
+                    format!("{}:{}\n", fail_count, first_ts).as_bytes(),
+                );
             }
         } else {
-            let _ = IoWrite::write_all(&mut fail_fh, format!("{}:{}\n", fail_count, first_ts).as_bytes());
+            let _ = IoWrite::write_all(
+                &mut fail_fh,
+                format!("{}:{}\n", fail_count, first_ts).as_bytes(),
+            );
         }
         #[cfg(feature = "syslog")]
         if let Some(ref mut l) = logger {
             // Never log candidate PINs; only metadata.
             let fs = _fail_sample; // local copy
-            if fail_count == 1 || fail_count == max_fails || fs == 1 || (fs > 1 && fail_count % fs == 0) {
+            if fail_count == 1
+                || fail_count == max_fails
+                || fs == 1
+                || (fs > 1 && fail_count % fs == 0)
+            {
                 let _ = l.warning(format!("pin-auth: user={user} failure count={fail_count}"));
             }
         }
-        if fail_count >= max_fails { std::process::exit(EXIT_LOCKED); }
+        if fail_count >= max_fails {
+            std::process::exit(EXIT_LOCKED);
+        }
         std::process::exit(EXIT_MISMATCH);
     }
 }
 
 fn validate_username(u: &str) -> bool {
     // Conservative policy: 1..32 chars, [a-zA-Z0-9_-], must start alnum/underscore, not all digits.
-    if u.is_empty() || u.len() > 32 { return false; }
+    if u.is_empty() || u.len() > 32 {
+        return false;
+    }
     let mut chars = u.chars();
-    if let Some(first) = chars.next() { if !first.is_ascii_alphanumeric() && first != '_' { return false; } } else { return false; }
-    if u.contains('/') { return false; }
-    if !u.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') { return false; }
+    if let Some(first) = chars.next() {
+        if !first.is_ascii_alphanumeric() && first != '_' {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    if u.contains('/') {
+        return false;
+    }
+    if !u
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return false;
+    }
     true
 }
-
 
 fn secure_resolve_pin_dir(input: &str) -> Result<String> {
     // Always require absolute path when running setuid root; otherwise allow relative for tests.
@@ -292,7 +299,8 @@ fn secure_resolve_pin_dir(input: &str) -> Result<String> {
         }
         // Mode check (0700 expected; allow 0710 for group traverse if desired?)
         let mode = md.mode() & 0o7777;
-        if mode & 0o022 != 0 { // group/world write bits
+        if mode & 0o022 != 0 {
+            // group/world write bits
             anyhow::bail!("PIN_DIR must not be group/world writable");
         }
     }

@@ -74,9 +74,15 @@ pub fn hash_pin(pin: &mut String) -> Result<String, PinHashError> {
                     let argon = {
                         let base = Argon2::default();
                         if let (Ok(m), Ok(t), Ok(p)) = (
-                            std::env::var("PIN_ARGON2_M_COST").unwrap_or_default().parse::<u32>(),
-                            std::env::var("PIN_ARGON2_T_COST").unwrap_or_default().parse::<u32>(),
-                            std::env::var("PIN_ARGON2_P_COST").unwrap_or_default().parse::<u32>(),
+                            std::env::var("PIN_ARGON2_M_COST")
+                                .unwrap_or_default()
+                                .parse::<u32>(),
+                            std::env::var("PIN_ARGON2_T_COST")
+                                .unwrap_or_default()
+                                .parse::<u32>(),
+                            std::env::var("PIN_ARGON2_P_COST")
+                                .unwrap_or_default()
+                                .parse::<u32>(),
                         ) {
                             if m > 0 && t > 0 && p > 0 {
                                 use argon2::{Algorithm, Params, Version};
@@ -103,7 +109,7 @@ pub fn hash_pin(pin: &mut String) -> Result<String, PinHashError> {
                 }
             }
         };
-    pin.zeroize();
+        pin.zeroize();
         Ok(out)
     }
 }
