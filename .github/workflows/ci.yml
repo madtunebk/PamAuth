@@ -22,7 +22,13 @@ jobs:
         run: cargo clippy --all-targets ${{ matrix.feature-set }} -- -D warnings
         shell: bash
       - name: Test
-        run: ALLOW_NON_ROOT=1 cargo test ${{ matrix.feature-set }}
+        run: |
+          set -euo pipefail
+          echo "== Testing feature set: '${{ matrix.feature-set }}' =="
+          if [ "${{ matrix.feature-set }}" = "--no-default-features" ]; then
+            echo "(Info) No hashing features enabled: integration tests are feature-gated and will be skipped."
+          fi
+          ALLOW_NON_ROOT=1 cargo test ${{ matrix.feature-set }}
         shell: bash
       - name: Fmt
         run: cargo fmt -- --check

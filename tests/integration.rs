@@ -1,3 +1,4 @@
+#![cfg(any(feature = "sha-crypt", feature = "argon2"))]
 use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
