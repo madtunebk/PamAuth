@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        feature-set: ["--no-default-features", "--features sha-crypt", "--features argon2", "--features sha-crypt,argon2,syslog"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: cargo clippy --all-targets --matrix-feature ${{ matrix.feature-set }} -- -D warnings
+        shell: bash
+      - name: Test
+        run: cargo test ${{ matrix.feature-set }}
+        shell: bash
+      - name: Fmt
+        run: cargo fmt -- --check

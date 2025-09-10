@@ -1,0 +1,55 @@
+# Ignore build artifacts
+/target/
+
+# Internal agent state (do not commit)
+.agent
+
+# Misc
+**/*.swp
+
+# Local test PIN directories / sample data
+pin.d/
+*.pin.d/
+tmp-pin.d/
+*/tmp-pin.d/
+**/*.passwd
+**/*.fail
+
+# Environment / secret files
+.env
+.env.*
+*.secret
+secrets/**/*
+
+# Logs / traces
+*.log
+logs/
+trace*
+*.trace
+
+# Core dumps / crash reports
+core
+core.*
+*.core
+*.dmp
+
+# Editor / OS junk
+.DS_Store
+Thumbs.db
+
+# Backup files
+*~
+*.bak
+*.orig
+*.rej
+
+# Coverage / profiling
+coverage/
+*.profraw
+*.gcda
+*.gcno
+lcov.info
+
+# Cargo incremental (already under target, but explicit if path changes)
+/.cargo/registry/
+/.cargo/git/
