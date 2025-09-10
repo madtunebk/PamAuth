@@ -1,0 +1,56 @@
+# Security & Hardening Suggestions
+
+This document collects recommendations for making **PamAuth** safer and easier to maintain.
+
+---
+
+## Setuid Safety
+
+- Open files with `O_NOFOLLOW | O_CLOEXEC`.
+- Ensure `PIN_DIR` is absolute and **not world-writable**.
+- When running setuid root, ignore `PIN_DIR` environment overrides (or require explicit flag).
+- Consider using `openat()` relative to a verified directory fd instead of path strings to avoid races.
+
+## Privilege Dropping
+
+- Open hash file as root, then immediately `seteuid(getuid())` to drop privileges before doing string parsing and hash verification.
+- This reduces the window of running with elevated privileges.
+
+## Input Hygiene
+
+- Validate `PAM_USER` strictly: e.g. regex `[a-zA-Z0-9._-]{1,32}`.
+- Reject usernames with `..` or starting with `-` to avoid odd tool semantics.
+- Defensive trimming of whitespace.
+
+## File Handling
+
+- `.fail` lockout file:
+  - Use a clear format: `count:<n>\nuntil:<epoch>\n`.
+  - Apply `flock(LOCK_EX)` while updating to prevent race conditions.
+- Treat corrupted or partial files as failure and reset.
+
+## Zeroization
+
+- Use the [`zeroize`](https://crates.io/crates/zeroize) crate to clear PIN buffers after use in both `genpin` and `check_pin`.
+- This minimizes exposure in process memory.
+
+## Syslog Logging
+
+- When logging, **never log candidate PINs**.
+- Only log metadata: username, exit code, reason.
+- Consider log rate limiting to avoid flooding during brute-force attempts.
+
+## PAM Integration
+
+- Example lines should always include `seteuid` in the `pam_exec` options for reliability.
+- Document both:
+  - **sufficient** mode (PIN *or* password).
+  - **required** mode (PIN *and* password), ideally combined with `pam_faillock` for rate limiting.
+
+## Build Hardening
+
+- Add to `Cargo.toml`:
+  ```toml
+  [profile.release]
+  panic = "abort"
+  lto = "thin"

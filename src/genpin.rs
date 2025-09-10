@@ -6,6 +6,7 @@ use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use zeroize::Zeroize;
 
 fn main() -> Result<()> {
     // Usage: genpin <username> [--dir /etc/pin.d]
@@ -16,12 +17,12 @@ fn main() -> Result<()> {
         // No username supplied: silently do nothing (success exit)
         return Ok(());
     };
-    let mut dir = std::env::var("PIN_DIR").unwrap_or_else(|_| "/etc/pin.d".to_string());
-    if let Some(flag) = args.next() {
-        if flag == "--dir" {
-            dir = args.next().unwrap_or(dir);
-        }
-    }
+    // Directory is fixed at /etc/pin.d for release builds. In debug/test builds we allow PIN_DIR for test isolation only.
+    let dir = if cfg!(debug_assertions) {
+        std::env::var("PIN_DIR").unwrap_or_else(|_| "/etc/pin.d".to_string())
+    } else {
+        "/etc/pin.d".to_string()
+    };
 
     println!("Creating/Updating PIN for user: {user}");
     let non_interactive = std::env::var("GENPIN_NONINTERACTIVE").ok();
@@ -67,8 +68,16 @@ fn main() -> Result<()> {
     // Hash (consumes & zeroizes mutable PIN copy)
     let hash = {
         let mut working = pin1.clone();
-        hash_pin(&mut working).map_err(|e| anyhow::anyhow!("hashing pin: {e}"))?
+        let res = hash_pin(&mut working).map_err(|e| anyhow::anyhow!("hashing pin: {e}"))?;
+        working.zeroize();
+        res
     };
+    // Zeroize original PIN buffers now that hashing is complete.
+    // (They might still be in terminal input buffers, but we clear our copies.)
+    let mut pin1_owned = pin1; // move then zeroize
+    let mut pin2_owned = pin2;
+    pin1_owned.zeroize();
+    pin2_owned.zeroize();
 
     let path = format!("{}/{}.passwd", dir, user);
     // Reset fail counter on new PIN

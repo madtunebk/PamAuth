@@ -3,7 +3,7 @@
 
 # Internal agent state (do not commit)
 .agent
-
+.task
 # Misc
 **/*.swp
 

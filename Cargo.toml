@@ -33,3 +33,9 @@ default = ["sha-crypt"]
 sha-crypt = ["dep:sha-crypt"]
 argon2 = ["dep:argon2"]
 syslog = ["dep:syslog"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

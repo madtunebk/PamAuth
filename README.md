@@ -28,7 +28,7 @@ Lightweight situations where you want a *small* extra gate without writing a ful
 * Digit length policy (min / max) enforced at set & verify time.
 * Structured exit codes for better PAM scripting / logging.
 * Optional syslog logging (feature `syslog`).
-* Directory override (`PIN_DIR`) for containers / tests.
+* Fixed secure directory: `/etc/pin.d` (override only in debug/test builds, not in release binaries).
 
 ## Quick Start
 ```bash
@@ -89,15 +89,7 @@ Policy (defaults can be changed with env vars):
 * `PIN_MAX_LEN` must be >= `PIN_MIN_LEN`.
 * These limits are enforced both when generating and verifying (defense in depth).
 
-You can override the directory (useful for testing) either with `--dir` or `PIN_DIR` env var:
-
-```bash
-PIN_DIR=./tmp-pin.d ./target/release/genpin alice
-# or
-./target/release/genpin alice --dir ./tmp-pin.d
-
-echo 1234 | PAM_USER=alice PIN_DIR=./tmp-pin.d ./target/release/check_pin && echo OK
-```
+The storage directory is fixed at `/etc/pin.d` for release builds. In debug/test builds (e.g. during `cargo test`) an environment variable `PIN_DIR` may be used internally to isolate test data; this is intentionally ignored in optimized release binaries to prevent environment-based redirection attacks.
 
 ### Non-interactive Mode
 
@@ -186,7 +178,7 @@ Run both binaries with `RUST_BACKTRACE=1` for debugging on unexpected failures.
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `PIN_DIR` | Directory storing `<user>.passwd` (+ optional `<user>.fail`) | `/etc/pin.d` |
+| (fixed) | Directory storing `<user>.passwd` (+ optional `<user>.fail`) | `/etc/pin.d` |
 | `GENPIN_NONINTERACTIVE` | Provide PIN (or `PIN:CONFIRM`) non-interactively to `genpin` | unset (interactive) |
 | `PIN_SCHEME` | Hashing scheme: `argon2`/`argon2id` (if argon2 feature enabled) or `sha-crypt` | `sha-crypt` (build default) |
 | `PIN_MIN_LEN` | Minimum allowed PIN length | `4` |
@@ -197,6 +189,7 @@ Run both binaries with `RUST_BACKTRACE=1` for debugging on unexpected failures.
 | `PIN_ARGON2_M_COST` | Argon2 memory cost (KiB) (all 3 must be set) | backend default |
 | `PIN_ARGON2_T_COST` | Argon2 iterations (time cost) | backend default |
 | `PIN_ARGON2_P_COST` | Argon2 parallelism | backend default |
+| `PIN_SYSLOG_FAIL_SAMPLE` | Log only every Nth failure (1 = log all) | `1` |
 
 Behavior notes:
 * Absence of a hash file for a user makes `check_pin` fail (letting PAM continue to next module).
