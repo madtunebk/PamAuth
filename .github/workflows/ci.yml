@@ -19,7 +19,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       - name: Clippy
-        run: cargo clippy --all-targets --matrix-feature ${{ matrix.feature-set }} -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
         shell: bash
       - name: Test
         run: cargo test ${{ matrix.feature-set }}
