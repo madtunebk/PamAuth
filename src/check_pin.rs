@@ -20,6 +20,22 @@ const EXIT_INPUT: i32 = 3;       // bad input format / empty
 const EXIT_CONFIG: i32 = 4;      // config error (length policy, etc.)
 
 fn main() -> Result<()> {
+    // Enforce root effective UID; debug build allows ALLOW_NON_ROOT=1 for tests.
+    let euid = nix::unistd::geteuid().as_raw();
+    if euid != 0 {
+        #[cfg(not(debug_assertions))]
+        {
+            eprintln!("denied: requires root (effective uid 0)");
+            std::process::exit(EXIT_CONFIG);
+        }
+        #[cfg(debug_assertions)]
+        {
+            if env::var("ALLOW_NON_ROOT").ok().as_deref() != Some("1") {
+                eprintln!("denied: requires root (set ALLOW_NON_ROOT=1 in debug to bypass for tests)");
+                std::process::exit(EXIT_CONFIG);
+            }
+        }
+    }
     let user = env::var("PAM_USER")
         .or_else(|_| env::var("USER"))
         .unwrap_or_default();
@@ -256,14 +272,6 @@ fn validate_username(u: &str) -> bool {
     true
 }
 
-fn is_setuid_root() -> bool {
-    #[allow(unused)]
-    {
-        let e = nix::unistd::geteuid();
-        let r = nix::unistd::getuid();
-        e.as_raw() == 0 && r != e
-    }
-}
 
 fn secure_resolve_pin_dir(input: &str) -> Result<String> {
     // Always require absolute path when running setuid root; otherwise allow relative for tests.

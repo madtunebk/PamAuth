@@ -3,7 +3,7 @@
 
 # Internal agent state (do not commit)
 .agent
-.task
+.tasks
 # Misc
 **/*.swp
 
@@ -53,3 +53,4 @@ lcov.info
 # Cargo incremental (already under target, but explicit if path changes)
 /.cargo/registry/
 /.cargo/git/
+local_push.sh

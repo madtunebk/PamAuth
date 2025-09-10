@@ -9,6 +9,22 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use zeroize::Zeroize;
 
 fn main() -> Result<()> {
+    // Require effective UID 0 (root). In debug builds a test override ALLOW_NON_ROOT=1 permits execution.
+    let euid = nix::unistd::geteuid().as_raw();
+    if euid != 0 {
+        #[cfg(not(debug_assertions))]
+        {
+            eprintln!("denied: requires root (effective uid 0)");
+            std::process::exit(1);
+        }
+        #[cfg(debug_assertions)]
+        {
+            if std::env::var("ALLOW_NON_ROOT").ok().as_deref() != Some("1") {
+                eprintln!("denied: requires root (set ALLOW_NON_ROOT=1 in debug to bypass for tests)");
+                std::process::exit(1);
+            }
+        }
+    }
     // Usage: genpin <username> [--dir /etc/pin.d]
     let mut args = env::args().skip(1);
     let user = if let Some(u) = args.next() {

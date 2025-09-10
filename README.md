@@ -1,226 +1,163 @@
 # pin-auth
 
-Minimal helper utilities to bolt on a short PIN (or other short secret) check inside a PAM (Pluggable Authentication Modules) stack via `pam_exec`.
+Minimal helper utilities to enforce a short per-user PIN (or other short secret) inside a PAM stack via `pam_exec`.
 
-> ⚠️ **SECURITY WARNING (READ FIRST)**  
-> This is **not** a full multi‑factor solution. A PIN entered in the same password prompt is *just another shared secret* and is vulnerable to brute force if rate limiting is weak. Treat it like a *short alternate password*. Audit, harden, and consider using established MFA solutions for real security requirements.
+> ⚠️ **SECURITY WARNING**  
+> This is **not** real multi‑factor auth. The PIN is entered in the *same* password prompt and is just another shared secret. Use only where a lightweight extra gate is acceptable.
 
-## Why Would I Use This?
-Lightweight situations where you want a *small* extra gate without writing a full PAM module:
-* Kiosk / lab / maker device quick unlock PIN.
-* Temporary alternate short credential for a throwaway account.
-* Demo / teaching example of integrating a custom verifier with PAM.
+---
+## Table of Contents
+1. Rationale & Non‑Goals  
+2. Features at a Glance  
+3. Quick Start (Build, Install, First PIN)  
+4. PAM Integration (sufficient vs required)  
+5. PIN Policy & Non‑Interactive Provisioning  
+6. Environment Variables  
+7. Security Model & Threat Notes  
+8. Built‑in Lockout & Logging  
+9. Hardening Checklist  
+10. Development  
+11. Configuration Variants  
+12. Roadmap  
+13. License
 
-## Do NOT Use This For
-* Strong MFA (it isn’t: same channel, same prompt).
-* Protecting high‑value production systems against determined attackers.
-* Any environment where regulatory / compliance requirements mandate audited auth modules.
+---
+## 1. Rationale & Non‑Goals
+Use cases:
+* Kiosk / lab / maker device quick unlock.
+* Throwaway / demo account alternate short secret.
+* Teaching example of PAM + external helper.
 
-## Binaries
-* `genpin` – create/update a hashed PIN in `/etc/pin.d/<user>.passwd`.
-* `check_pin` – verify a candidate (from stdin) against the stored hash; returns structured exit codes.
+Do **not** use for:
+* Strong MFA (single prompt = single factor).
+* High‑value production systems with determined adversaries.
+* Regulated environments needing audited/authenticated PAM modules.
 
-## Feature Highlights
-* Pure Rust hashing backends: SHA‑512 crypt (default) or Argon2id (optional feature).
-* Optional Argon2 cost tuning via environment.
-* Per‑user fail counter + timed lockout (pam_faillock‑like).
-* Non‑interactive provisioning for automation.
-* Digit length policy (min / max) enforced at set & verify time.
-* Structured exit codes for better PAM scripting / logging.
-* Optional syslog logging (feature `syslog`).
-* Fixed secure directory: `/etc/pin.d` (override only in debug/test builds, not in release binaries).
+## 2. Features at a Glance
+* Pure Rust hashing: SHA‑512 crypt (default) or Argon2id (feature `argon2`).
+* Argon2 cost tuning via env vars.
+* Per‑user fail counter with window + timed lockout.
+* Digit length policy (min/max) enforced at set & verify.
+* Structured exit codes (0 ok | 1 mismatch | 2 locked | 3 bad input | 4 config).
+* Optional syslog logging (feature `syslog`) with failure sampling.
+* Zeroization of PIN buffers after use.
+* Fixed secure directory: `/etc/pin.d` (release) – debug/tests may override internally.
 
-## Quick Start
+## 3. Quick Start
 ```bash
 cargo build --release
 sudo install -D -m 0755 target/release/genpin /usr/local/sbin/genpin
 sudo install -D -m 4755 target/release/check_pin /usr/local/sbin/check_pin
 sudo mkdir -p /etc/pin.d && sudo chmod 700 /etc/pin.d
 
-sudo genpin alice   # set a PIN (default policy 4..6 digits)
+sudo genpin alice          # interactively set a 4–6 digit PIN
 echo 1234 | PAM_USER=alice /usr/local/sbin/check_pin && echo OK || echo FAIL
+Root requirement: Both binaries expect effective UID 0 in release builds. This lets `check_pin` read protected files and ensures consistent ownership enforcement. For development/tests (debug builds) you can set `ALLOW_NON_ROOT=1` to bypass (used by the integration tests).
 ```
 
-Add to (for example) `/etc/pam.d/login` *before* normal password auth if you want fast success:
-```
-auth sufficient pam_exec.so expose_authtok quiet /usr/local/sbin/check_pin
-```
-Or use `required` if the PIN must also succeed.
+## 4. PAM Integration
+Place the helper early in an auth stack using `pam_exec.so`.
 
-## Build
-Rust 1.70+ (Edition 2021). No external libcrypt needed.
-```bash
-cargo build --release
+Sufficient (PIN alone grants success; fallback to password if absent/mismatch):
+```
+auth  sufficient  pam_exec.so expose_authtok seteuid quiet /usr/local/sbin/check_pin
 ```
 
-## Install
-
-Copy the binaries to a root-owned directory in PATH (e.g. `/usr/local/sbin`). Make `check_pin` setuid root so it can read the protected PIN directory; `genpin` does not need to be setuid (you typically run it with sudo when writing `/etc/pin.d`).
-
-```bash
-sudo install -D -m 0755 target/release/genpin /usr/local/sbin/genpin
-sudo install -D -m 4755 target/release/check_pin /usr/local/sbin/check_pin
+Required (PIN must succeed in addition to later password modules):
 ```
-
-Create the storage directory (root only, 0700):
-
-```bash
-sudo mkdir -p /etc/pin.d
-sudo chmod 700 /etc/pin.d
+auth  required    pam_exec.so expose_authtok seteuid quiet /usr/local/sbin/check_pin
 ```
+Options:
+* `expose_authtok` – sends the typed secret to stdin of the helper.
+* `seteuid` – ensures proper effective UID semantics for the setuid binary.
+* `quiet` – suppress extra chatty output.
 
-## Setting / Updating a PIN
+Because the PIN is typed in the same prompt, this behaves like an alternate short password. For real second‑factor UX use a dedicated PAM module with a separate challenge.
 
-Run (as root or with sudo so ownership/permissions can be enforced):
-
+## 5. PIN Policy & Provisioning
+Set / update a PIN:
 ```bash
 sudo genpin alice
-# Prompts:
-# Enter new PIN:
-# Repeat new PIN:
 ```
+Policy (defaults modifiable via env):
+* Digits only (0–9).
+* Minimum length: `PIN_MIN_LEN` (default 4).
+* Maximum length: `PIN_MAX_LEN` (default 6) and >= min.
+* Enforced both at generation and verification.
 
-A file will be written at `/etc/pin.d/alice.passwd` with mode 0600 and owner root:root containing a `$6$` (SHA-512 crypt) hash (or Argon2 if configured at build/runtime).
-
-Policy (defaults can be changed with env vars):
-* Digits only (0-9). Any non-digit input is rejected.
-* Default minimum length: 4 (override with `PIN_MIN_LEN`).
-* Default maximum length: 6 (override with `PIN_MAX_LEN`).
-* `PIN_MAX_LEN` must be >= `PIN_MIN_LEN`.
-* These limits are enforced both when generating and verifying (defense in depth).
-
-The storage directory is fixed at `/etc/pin.d` for release builds. In debug/test builds (e.g. during `cargo test`) an environment variable `PIN_DIR` may be used internally to isolate test data; this is intentionally ignored in optimized release binaries to prevent environment-based redirection attacks.
-
-### Non-interactive Mode
-
-For scripting (CI/tests/automation) you can supply the PIN via the `GENPIN_NONINTERACTIVE` environment variable instead of using TTY prompts:
-
+Non‑interactive (automation / CI):
 ```bash
 GENPIN_NONINTERACTIVE=2468 ./target/release/genpin alice
+GENPIN_NONINTERACTIVE=2468:2468 ./target/release/genpin alice   # with explicit confirm
 ```
+Calling `genpin` with no username is a no‑op (exit 0).
 
-You can optionally include a confirmation (otherwise it reuses the same value):
+## 6. Environment Variables
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| (fixed) | Storage directory (release builds) | `/etc/pin.d` |
+| `GENPIN_NONINTERACTIVE` | Provide `PIN` or `PIN:CONFIRM` non‑interactively | unset |
+| `PIN_SCHEME` | `argon2` / `argon2id` / `sha-crypt` (feature dependent) | build default (`sha-crypt`) |
+| `PIN_MIN_LEN` | Minimum PIN length | `4` |
+| `PIN_MAX_LEN` | Maximum PIN length | `6` |
+| `PIN_MAX_FAILS` | Fail threshold before lock | `5` |
+| `PIN_FAIL_WINDOW` | Rolling window seconds to aggregate fails (0 = unlimited) | `900` |
+| `PIN_LOCKOUT_SECS` | Lock duration after threshold (0 = indefinite until reset/new PIN) | `300` |
+| `PIN_ARGON2_M_COST` | Argon2 memory KiB (all 3 Argon2 vars must be set) | backend default |
+| `PIN_ARGON2_T_COST` | Argon2 iterations | backend default |
+| `PIN_ARGON2_P_COST` | Argon2 parallelism | backend default |
+| `PIN_SYSLOG_FAIL_SAMPLE` | Log only every Nth failure (1 = all) | `1` |
 
-```bash
-GENPIN_NONINTERACTIVE=2468:2468 ./target/release/genpin alice
-```
+Behavior notes:
+* No hash file ⇒ helper exits mismatch (PAM continues).
+* Success or new PIN resets fail counter.
+* Timed lockout writes `lock:<until_epoch>`; expires automatically.
+* Argon2 tuning only applied if all three cost vars parse to >0 (e.g. `PIN_ARGON2_M_COST=65536 PIN_ARGON2_T_COST=3 PIN_ARGON2_P_COST=1`).
 
-If you call `genpin` without a username it performs a no-op and exits success (useful when templating commands that may or may not have a user variable set); no files are created.
+## 7. Security Model & Threat Notes
+* Hashing: `$6$` (SHA‑512 crypt) by default; Argon2id optional.
+* Short numeric space => brute force feasible: pair with host / PAM rate limiting.
+* Setuid root binary kept minimal; review diffs regularly.
+* Hash & fail files: root:root, 0600 inside directory 0700.
+* PIN buffers zeroized after hashing / verification (still consider process memory sensitive while running).
+* No protection against keylogging / credential interception in the shared prompt.
+* Offline cracking risk if files leak; keep backups and logs secured.
 
-## Manual Verification (Debug)
+## 8. Built‑in Lockout & Logging
+* Fail state file `<user>.fail` stores either `count:first_ts` or `lock:<until>`.
+* Window (`PIN_FAIL_WINDOW`) resets count after inactivity.
+* Lock duration (`PIN_LOCKOUT_SECS`) controls automatic unlock time.
+* Syslog (feature `syslog`): success, sampled failures, lock events (facility AUTH). Never logs PIN values.
+* Sampling via `PIN_SYSLOG_FAIL_SAMPLE` reduces log flood during brute force.
 
-You can test `check_pin` outside PAM by piping a candidate PIN on stdin and setting `PAM_USER`:
+## 9. Hardening Checklist
+* Enable Argon2 (`--features argon2`) and tune costs.
+* Add external PAM rate limiting (`pam_faillock`).
+* Keep `/etc/pin.d` permissions strict (0700 dir, 0600 files).
+* Monitor syslog for spikes & lockouts.
+* Use distinct PAM control flags (`sufficient` vs `required`) intentionally.
+* Rebuild with updates; audit setuid binary integrity.
 
-```bash
-echo 1234 | PAM_USER=alice ./target/release/check_pin && echo OK || echo FAIL
-```
-
-Exit status 0 means match.
-
-## PAM Integration Details
-
-Add a line using `pam_exec.so` referencing `check_pin`. Placement depends on whether the PIN should be sufficient by itself or an additional factor. Example for login (`/etc/pam.d/login`) adding it as an *sufficient* auth method before the normal password:
-
-```
-# PIN auth (if present) – succeed fast if PIN matches
-auth    sufficient    pam_exec.so expose_authtok seteuid quiet /usr/local/sbin/check_pin
-# (Rest of your normal auth stack below)
-```
-
-Explanation of options:
-
-* `expose_authtok` – Passes the user's entered password/PIN to the helper on stdin.
-* `seteuid` – Runs the helper with the effective UID (needed for setuid binary semantics reliability). Often optional here but common with pam_exec.
-* `quiet` – Suppresses extra messages.
-
-If you want the PIN to be *required* in addition to the main password, change `sufficient` to `required` and place it early; the user must then enter the PIN in the password prompt (and your primary module must still succeed).
-
-Because both factors are typed into the *same* single password prompt in this simple design, this mainly acts as a per-user alternate short password. For true multi-factor separation (different prompts/devices), a more advanced module or challenge mechanism is required.
-
-## Security Notes & Threat Model
-
-* Hashing: Uses SHA-512 crypt (`$6$`) (default) or Argon2id if enabled (`PIN_SCHEME=argon2`). For stronger resistance or higher cost tune Argon2 parameters.
-* PIN length & format: Configurable via `PIN_MIN_LEN` (default 4) and `PIN_MAX_LEN` (default 6); only digits allowed to keep semantics clear.
-* Short secrets (PINs) are vulnerable to brute force; rate limiting must occur elsewhere (e.g. `pam_faillock`, `pam_tally2`, or host-based protections). This helper does not implement throttling.
-* Files are root-owned and 0600 to prevent unprivileged reads. Ensure backups/logs do not leak them.
-* `check_pin` being setuid root increases audit needs; keep the code small (as here) and prefer regular security hardening: `nosuid` mounts, file integrity monitoring, etc.
-* PIN strings used for hashing/verification are zeroized after use in memory, but process memory should still be considered sensitive while running.
-* Built-in lockout: per-user `.fail` file with threshold (`PIN_MAX_FAILS`), window (`PIN_FAIL_WINDOW`, default 900s) & lock duration (`PIN_LOCKOUT_SECS`, default 300s). Locked state stored as `lock:<until_epoch>`.
-* Exit codes: 0 success | 1 mismatch | 2 locked | 3 bad input | 4 config error.
-* Optional syslog (feature `syslog`): logs success / failure / lock events (facility: AUTH).
-* Argon2 recommended when strong memory hardness desired (enable `--features argon2` and set costs).
-* This does NOT protect against credential interception (same prompt) or offline dictionary if hash files leak; ensure directory permissions and backups hygiene.
-
-## Configuration Variants / Examples
-
-Require a PIN only for specific users (e.g. members of a group) by wrapping logic in a tiny shell script or adjusting PAM conditionally (e.g., using `pam_succeed_if`). Simpler: only create `/etc/pin.d/<user>.passwd` for accounts you want protected; absence silently fails and PAM continues.
-
-## Uninstall
-
-```bash
-sudo rm -f /usr/local/sbin/{genpin,check_pin}
-# Optionally keep or remove stored PIN hashes
-# sudo rm -rf /etc/pin.d
-```
-
-## Development & Testing
-
+## 10. Development
 ```bash
 cargo fmt -- --check
 cargo clippy --all-targets -- -D warnings
-cargo build
-cargo test
+ALLOW_NON_ROOT=1 cargo test
 ```
+Use `RUST_BACKTRACE=1` for troubleshooting. Integration tests run with a temporary debug override of the directory.
 
-Run both binaries with `RUST_BACKTRACE=1` for debugging on unexpected failures.
+## 11. Configuration Variants
+Selective enforcement: create hash files only for users needing a PIN; absence means fall through. Combine with `pam_succeed_if` or wrapper scripts to scope usage.
 
-### Environment Variables
-
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| (fixed) | Directory storing `<user>.passwd` (+ optional `<user>.fail`) | `/etc/pin.d` |
-| `GENPIN_NONINTERACTIVE` | Provide PIN (or `PIN:CONFIRM`) non-interactively to `genpin` | unset (interactive) |
-| `PIN_SCHEME` | Hashing scheme: `argon2`/`argon2id` (if argon2 feature enabled) or `sha-crypt` | `sha-crypt` (build default) |
-| `PIN_MIN_LEN` | Minimum allowed PIN length | `4` |
-| `PIN_MAX_LEN` | Maximum allowed PIN length | `6` |
-| `PIN_MAX_FAILS` | Lockout threshold for `check_pin` attempts (stored in `<user>.fail`) | `5` |
-| `PIN_FAIL_WINDOW` | Time window in seconds to accumulate failures before reset (0 = no reset) | `900` |
-| `PIN_LOCKOUT_SECS` | Seconds to lock after threshold reached (0 = permanent until manual reset/new PIN) | `300` |
-| `PIN_ARGON2_M_COST` | Argon2 memory cost (KiB) (all 3 must be set) | backend default |
-| `PIN_ARGON2_T_COST` | Argon2 iterations (time cost) | backend default |
-| `PIN_ARGON2_P_COST` | Argon2 parallelism | backend default |
-| `PIN_SYSLOG_FAIL_SAMPLE` | Log only every Nth failure (1 = log all) | `1` |
-
-Behavior notes:
-* Absence of a hash file for a user makes `check_pin` fail (letting PAM continue to next module).
-* Lockout occurs when failures >= `PIN_MAX_FAILS`; counter resets on successful auth or PIN regeneration.
-* Timed lockouts: if `PIN_LOCKOUT_SECS>0` a lock record `lock:<until>` is written; after that epoch the file is removed automatically on next attempt.
-* Argon2 parameters only applied if all three cost vars parse to >0. Example moderate settings: `PIN_ARGON2_M_COST=65536 PIN_ARGON2_T_COST=3 PIN_ARGON2_P_COST=1`.
-
-## Hardening Checklist
-* Enable Argon2 feature and tune costs appropriately.
-* Add PAM rate limiting (`pam_faillock`) in addition to built-in lockout.
-* Restrict `/etc/pin.d` to root (0700) – already required.
-* Monitor syslog (if enabled) for unexpected spikes in failures / lockouts.
-* Consider using distinct exit codes in PAM rules if chaining custom logic.
-* Keep the code small & audited; rebuild on security updates.
-
-## CI / Quality
-GitHub Actions workflow runs fmt, clippy (warnings as errors), tests across feature matrices including Argon2 + syslog.
-* Running `genpin` with no username exits 0 and does nothing.
-
-## Roadmap / Ideas
-
+## 12. Roadmap / Ideas
 * Bcrypt / scrypt optional backends.
-* Distinct backoff (progressive delays) instead of immediate lock.
-* Custom PAM module for separate prompt (true second factor UX).
-* Optional JSON audit log to file.
-* Systemd notification / journald structured fields.
+* Progressive backoff instead of immediate lock.
+* Dedicated PAM module for separate prompt (true 2nd factor UX).
+* Optional JSON audit log.
+* Systemd / journald structured logging.
 
-## License
-
+## 13. License
 MIT (see `LICENSE`).
 
 ---
-
 Happy hacking.
